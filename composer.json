@@ -10,18 +10,24 @@
     }
   ],
   "require": {
-    "php": "^7.1||^8.0",
+    "php": ">=8.0",
     "ext-json": "*",
     "firebase/php-jwt": "^6.1",
-	"illuminate/cache": "^9.0|^8.0",
-	"psr/container": "1.1.1",
-	"illuminate/redis": "^9.0",
-	"illuminate/events": "^9.0",
-	"illuminate/filesystem": "^9.0"
+    "illuminate/cache": "^9.0|^8.0",
+    "psr/container": "1.1.1",
+    "illuminate/redis": "^9.0",
+    "illuminate/events": "^9.0",
+    "illuminate/filesystem": "^9.0",
+    "symfony/mailer": "^6.0",
+    "ext-fileinfo": "*",
+    "alibabacloud/client": "^1.5",
+    "qiniu/php-sdk": "^7.9",
+    "qcloudsms/qcloudsms_php": "^0.1.4",
+    "workerman/redis-queue": "^1.0"
   },
   "autoload": {
     "psr-4": {
-      "Gzqsts\\Core\\": "src/"
+      "Gzqsts\\Core\\": "src"
     }
   }
 }
