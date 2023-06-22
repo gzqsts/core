@@ -38,7 +38,7 @@ class Captcha
      */
     public static function base64(array $_config = [])
     {
-        $config = config('plugin.gzqsts.qstapp.app.captcha');
+        $config = config('plugin.gzqsts.core.app.captcha');
         if (!empty($_config)) {
             $config = array_merge($config, $_config);
         }
@@ -138,7 +138,7 @@ class Captcha
             $key = mb_strtolower($bag, 'UTF-8');
         }
 
-        $config = config('plugin.gzqsts.qstapp.app.captcha');
+        $config = config('plugin.gzqsts.coer.app.captcha');
         $hash = password_hash($key, PASSWORD_BCRYPT, ['cost' => 10]);
         Cache::put($hash, $hash, $config['expire'] ?? 60);
         return ['value' => $bag, 'key' => $hash];

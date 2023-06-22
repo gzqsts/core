@@ -10,23 +10,23 @@ use Gzqsts\Core\exception\ThrottleException;
 use function sprintf;
 
 /*
+自定函数返回一个key
 实例：在回调函数里针对不同控制器和方法定制生成key，中间件会进行转换:
 'key' => function($throttle, $request) {
     return 'deviceId');
 },
 
- * //'key' => 'controller/action/ip' //上述配置的快捷实现
+//'key' => 'controller/action/ip' //上述配置的快捷实现
 示例三：在闭包内修改本次访问频率或临时更换限流策略：(PS：此示例需要本中间件在路由中间件后启用，这样预设的替换功能才会生效。)
-
 'key' => function($throttle, $request) {
     $throttle->setRate('5/m');                      // 设置频率
     $throttle->setDriverClass(CounterSlider::class);// 设置限流策略
     return true;
 },
-示例四：在路由中独立配置
 
+示例四：在路由中独立配置
 Route::any('/api/driver-ocr', [ app\api\controller\Ocr::class, 'driver'])->middleware([
-    app\middleware\Throttle::class
+    \Gzqsts\Core\throttle\throttle\Throttle::class
 ]);
 
 Route::group('/path', function() {
@@ -34,7 +34,7 @@ Route::group('/path', function() {
     ...
 })->setParams(['visit_rate' => '20/m',
     ...
-])->middleware(\app\middleware\Throttle::class);*/
+])->middleware(\Gzqsts\Core\throttle\throttle\Throttle::class);*/
 
 class Throttle
 {

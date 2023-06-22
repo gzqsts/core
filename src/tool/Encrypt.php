@@ -377,7 +377,7 @@ class Encrypt
      * @param  string $string 加密内容
      * @param  string $operation 动作 DECODE表示解密,其它表示加密
      * @param  string $key 密钥
-     * @param  int $expiry 有效时间秒
+     * @param  int $expiry 有效时间秒 - 前后端时间不一致也不会影响解密
      * @return string 加密串
      */
     public static function authcode(string $string, string $operation = 'DECODE', string $key = '', int $expiry = 0):string

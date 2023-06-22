@@ -4,36 +4,36 @@ return [
     'enable' => true,
     'jwt' => [
         // 算法类型 HS256、HS384、HS512、RS256、RS384、RS512、ES256、ES384、Ed25519
-        'algorithms' => 'HS256',//HS256 RS512
-        // access令牌秘钥
-        'access_secret_key' => '2022d3d3LmJq',
+        'algorithms' => getenv('APP_ALGORITHMS'),//HS256 RS512
+
+        // access令牌秘钥 - HS256使用 12位
+        'access_secret_key' => getenv('APP_ACCESS_SECRET_KEY'),
+        // refresh令牌秘钥 - HS256使用 16位
+        'refresh_secret_key' => getenv('APP_REFRESH_SECRET_KEY'),
+
+        //access令牌私钥- 需完整字符证书 - 独立证书唯一使用 只暴露公钥 通过公钥解密  RS512 RS256使用
+        'access_private_key' => base_path() . getenv('APP_PRIVATE_PATH'),
+        //access令牌公钥- 需完整字符证书 - 独立证书唯一使用 只暴露公钥 通过公钥解密 RS512 RS256使用
+        'access_public_key' => base_path() . getenv('APP_PUBLIC_PATH'),
+        //refresh令牌私钥- 需完整字符证书 - 独立证书唯一使用 只暴露公钥 通过公钥解密 RS512 RS256使用
+        'refresh_private_key' => base_path() . getenv('APP_PRIVATE_PATH'),
+        //refresh令牌公钥 - 需完整字符证书 - 独立证书唯一使用 只暴露公钥 通过公钥解密 RS512 RS256使用
+        'refresh_public_key' => base_path() . getenv('APP_PUBLIC_PATH'),
+
         // access令牌过期时间，单位：秒。默认 24 小时 86400
-        'access_exp' => 86400,
-        // refresh令牌秘钥
-        'refresh_secret_key' => '2022KTxigxc9o50c',
+        'access_exp' => getenv('APP_ACCESS_EXP'),
         // refresh令牌过期时间，单位：秒。默认 90 天 7776000
-        'refresh_exp' => 7776000,
+        'refresh_exp' => getenv('APP_REFRESH_EXP'),
         // 令牌签发者
-        'iss' => 'www.gzqsts.com',
+        'iss' => getenv('APP_ISS'),
+
         // 时钟偏差冗余时间，单位秒。建议这个余地应该不大于几分钟。
         'leeway' => 60,
         // 单设备登录 -限制只能在一个设备登录
-        'is_single_device' => false,
+        'is_single_device' => getenv('APP_IS_SINGLE_DEVICE'),
         // 缓存令牌前缀
-        'cache_token_pre' => 'JWT_TOKEN:',
-        //access令牌私钥- 需完整字符证书 - 独立证书唯一使用 只暴露公钥 通过公钥解密
-        'access_private_key' => '',
-        //access令牌公钥- 需完整字符证书 - 独立证书唯一使用 只暴露公钥 通过公钥解密
-        'access_public_key' => '',
-        //refresh令牌私钥- 需完整字符证书 - 独立证书唯一使用 只暴露公钥 通过公钥解密
-        'refresh_private_key' => '',
-        //refresh令牌公钥 - 需完整字符证书 - 独立证书唯一使用 只暴露公钥 通过公钥解密
-        'refresh_public_key' => ''
+        'cache_token_pre' => 'JWT_TOKEN:'
     ],
-
-
-
-
     'cache' => [
         'default' => 'redis',
         'stores' => [
@@ -94,20 +94,20 @@ return [
         // 缓存的键，true 表示使用来源ip (request->getRealIp(true)) 否则可以自定函数返回一个key
         'key'                          => true,
         // 要被限制的请求类型, eg: GET POST PUT DELETE HEAD
-        'visit_method'                 => ['GET', 'HEAD', 'POST'],
+        'visit_method'                 => ['GET', 'POST','HEAD', 'PUT','DELETE'],
         // 设置访问频率，例如 '10/m' 指的是允许每分钟请求10次。空值表示不限制,
         //10/m  20/h  300/d 200/300
-        'visit_rate'                   => '45/m',//默认全局限制每次访问45次/分钟，后期在根据需要单独限制的接口在增加调用拦截，设置不同方法就可
+        'visit_rate'                   => '30/m',//默认全局限制每次访问30次/分钟，后期在根据需要单独限制的接口在增加调用拦截，设置不同方法就可
         // 响应体中设置速率限制的头部信息，含义见：https://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting
         'visit_enable_show_rate_limit' => true,
         /*
          * 设置节流算法，组件提供了四种算法：
-         *  - Gzqsts\Core\Throttle\throttle\CounterFixed ：计数固定窗口
-         *  - Gzqsts\Core\Throttle\throttle\CounterSlider: 滑动窗口
-         *  - Gzqsts\Core\Throttle\throttle\TokenBucket : 令牌桶算法
-         *  - Gzqsts\Core\Throttle\throttle\LeakyBucket : 漏桶限流算法
+         *  - Gzqsts\Core\throttle\throttle\CounterFixed ：计数固定窗口
+         *  - Gzqsts\Core\throttle\throttle\CounterSlider: 滑动窗口
+         *  - Gzqsts\Core\throttle\throttle\TokenBucket : 令牌桶算法
+         *  - Gzqsts\Core\throttle\throttle\LeakyBucket : 漏桶限流算法
          */
-        'driver_name'                  => \Gzqsts\Core\Throttle\throttle\CounterFixed::class
+        'driver_name'                  => \Gzqsts\Core\throttle\throttle\CounterFixed::class
     ],
     'captcha' => [
         // 验证码字符集合

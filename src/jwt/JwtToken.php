@@ -2,361 +2,42 @@
 
 declare(strict_types=1);
 
-namespace Gzqsts\Core\Jwt;
+namespace Gzqsts\Core\jwt;
 
 use Firebase\JWT\BeforeValidException;
 use Firebase\JWT\ExpiredException;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use Firebase\JWT\SignatureInvalidException;
-use Gzqsts\Core\Exception\{
-    JwtTokenException,
-    JwtLoginTokenException,
-    JwtQuitLoginTokenException
+
+use Gzqsts\Core\exception\{
+    //422
+    UnprocessableException,
+    //401
+    JwtTokenException
 };
-use UnexpectedValueException;
-use Gzqsts\Core\LaravelCache\Cache;
-use support\Db;
+
+use Gzqsts\Core\laravelCache\Cache;
+
+use app\model\{
+    Device,
+    UserToken
+};
 
 class JwtToken
 {
     /**
-     * access_token.
-     */
-    private const ACCESS_TOKEN = 1;
-
-    /**
-     * refresh_token.
-     */
-    private const REFRESH_TOKEN = 2;
-
-    protected static $payload = [];
-
-    /**
-     * @desc: 生成新令牌
-     * @param array $extend 合并到token中的数据
-     * @return array token表数据
-     * @throws JwtTokenException
-     */
-    public static function generateToken(array $extend): array
-    {
-        if (!isset($extend['uid'])) {
-            throw new JwtTokenException(trans('jwt.lackId',[], 'qstapp_msg'));
-        }
-        $config = self::_getConfig();
-        $ip = request()->getRealIp($safe_mode = true);
-        //token有效时间
-        $config['access_exp'] = $extend['access_exp'] ?? $config['access_exp'];
-        //刷新token有效时间
-        $config['refresh_exp'] = $extend['refresh_exp'] ?? $config['refresh_exp'];
-
-        $key = self::getkey($extend['uid']);
-        $res = Cache::rememberForever($config['cache_token_pre'] . $key, function () use ($key){
-            return (array)Db::table('user_token')->where('key', $key)->first();
-        });
-        //创建token时 判断token是否过期 没有过期的情况下 直接返回缓存数据
-        if($res && time() < ($res['expires_in'] - $config['leeway'])){
-            return $res;
-        }
-
-        $devices = QTgetDevices();
-        $exts = [
-            'key' => $key,
-            'platform' => $devices['uniPlatform'],
-            'os_name' => $devices['osName'],
-            'device_model' => $devices['deviceModel'],
-            'cid' => request()->header('x-qst-cid',''),
-            'ip' => $ip
-        ];
-        //获取数据体 extend字段存放extend原数据
-        $payload = self::generatePayload($config, array_merge($extend, $exts));
-        $tokens = [
-            'uid' => $extend['uid'],
-            //token有效时间
-            'expires_in' => $payload['accessPayload']['exp'],
-            //非对称加密算法 私钥加密
-            //RS256 系列是使用 RSA 私钥进行签名，使用 RSA 公钥进行验证。
-            //公钥即使泄漏也毫无影响，只要确保私钥安全就行。RS256 可以将验证委托给其他应用，只要将公钥给他们就行。
-            'access_token' => self::makeToken($payload['accessPayload'], self::getPrivateKey($config), $config['algorithms']),
-            'refresh_token' => self::makeToken($payload['refreshPayload'], self::getPrivateKey($config, self::REFRESH_TOKEN), $config['algorithms']),
-            'created_at' => date('Y-m-d H:i:s')
-        ];
-        unset($exts['key']);
-        return self::upDataToken(array_merge($exts, $tokens), $key);
-    }
-
-    /**
-     * @desc: 刷新令牌
-     * @param string $refreshToken
-     * @return array token表数据
-     */
-    public static function refreshToken(string $refreshToken, array $upExtend = []): array
-    {
-        if(empty($refreshToken) || 'undefined' == $refreshToken){
-            //刷新令牌无效
-            throw new JwtTokenException(trans('jwt.token_invalid',[], 'qstapp_msg'));
-        }
-        $config = self::_getConfig();
-        //验证刷新token是否有效 - 返回刷新toekn数据
-        $refreshData = self::verifyToken($refreshToken, self::REFRESH_TOKEN);
-        //原扩展信息
-        $extend = $refreshData['extend'];
-        if (empty($extend['uid']) || empty($extend['key'])) {
-            throw new JwtTokenException(trans('jwt.lackId',[], 'qstapp_msg'));
-        }
-
-        $request = request();
-        $devices = QTgetDevices();
-        //汇入新的扩展字段数据
-        if(!empty($upExtend)){
-            $extend = array_merge($extend, $upExtend);
-        }
-        if(empty($extend['platform'])){
-            $extend['platform'] = $devices['uniPlatform'];
-        }
-        if(empty($extend['os_name'])){
-            $extend['os_name'] = $devices['osName'];
-        }
-        if(empty($extend['device_model'])){
-            $extend['device_model'] = $devices['deviceModel'];
-        }
-        $extend['cid'] = $request->header('x-qst-cid',$extend['cid']);
-        $extend['ip'] = $request->getRealIp($safe_mode = true);
-        $payload = self::generatePayload($config, $extend);
-        self::$payload = $payload;
-
-        //创建token新令牌
-        $new_access_token = self::makeToken($payload['accessPayload'], self::getPrivateKey($config), $config['algorithms']);
-        //创建刷新token新令牌
-        $new_refresh_token = self::makeToken($payload['refreshPayload'], self::getPrivateKey($config, self::REFRESH_TOKEN), $config['algorithms']);
-        //插入数据表扩展信息
-        $tokens = [
-            'platform' => $extend['platform'],
-            'os_name' => $extend['os_name'],
-            'device_model' => $extend['device_model'],
-            'cid' => $extend['cid'],
-            'ip' => $extend['ip'],
-            'uid' => $extend['uid'],
-            'expires_in' => $payload['accessPayload']['exp'],
-            'access_token' => $new_access_token,
-            'refresh_token' => $new_refresh_token,
-            'created_at' => date('Y-m-d H:i:s')
-        ];
-        return self::upDataToken($tokens, $extend['key']);
-    }
-
-    /**
-     * @desc: 验证令牌
-     * @param int $tokenType 1验证token 2验证刷新token
-     * @param string|null $token
-     * @return array
-     * 返回 [
-        exp
-        extend =>[]
-        iat
-        iss
-        token
-    ]
-     */
-    public static function verify(int $tokenType = self::ACCESS_TOKEN, string $token = ''): array
-    {
-		if(empty($token) && $tokenType != 2){
-		    $token = request()->header('x-qst-token');
-		}
-        if(empty($token) || 'undefined' == $token){
-            //刷新令牌无效
-            throw new JwtTokenException(trans('jwt.token_invalid',[], 'qstapp_msg'));
-        }
-        return self::verifyToken($token, $tokenType);
-    }
-
-    /**
-     * @desc: 注销令牌 全部用户或指定用户某端数据
-     * @param string $key
-     * @return bool
-     */
-    public static function clear(string $key = ''): bool
-    {
-        $key = $key??false;
-        $config = self::_getConfig();
-        Db::table('user_token')
-            ->when($key, function ($query, $key) {
-                return $query->where('key', $key);
-            })
-            ->sharedLock()
-            ->orderBy('uid')
-            ->lazy()
-            ->each(function ($val) use ($key, $config){
-                Db::table('user_token')
-                    ->when($key, function ($query, $key) {
-                        return $query->where('key', $key);
-                    })
-                    ->delete();
-                Cache::forget($config['cache_token_pre'] . $val->key);
-            });
-        return true;
-    }
-
-    /**
-     * @desc: 校验令牌
-     * @param string $token
-     * @param int $tokenType
-     * @return array
-     * 返回 [
-        exp
-        extend =>[]
-        iat
-        iss
-        token
-    ]
-     */
-    private static function verifyToken(string $token, int $tokenType): array
-    {
-        $config = self::_getConfig();
-        $publicKey = self::ACCESS_TOKEN == $tokenType ? self::getPublicKey($config['algorithms']) : self::getPublicKey($config['algorithms'], self::REFRESH_TOKEN);
-        JWT::$leeway = $config['leeway'];
-        try {
-            $decoded = JWT::decode($token, new Key($publicKey, $config['algorithms']));
-        } catch (SignatureInvalidException $signatureInvalidException) {
-            //身份验证令牌无效
-            throw new JwtTokenException(trans('jwt.token_invalid',[], 'qstapp_msg'));
-        } catch (BeforeValidException $beforeValidException) {
-            //身份验证令牌尚未生效
-            throw new JwtTokenException(trans('jwt.token_check_invalid',[], 'qstapp_msg'));
-        } catch (ExpiredException $expiredException) {
-            $isTip = true;
-            //当验证token时 如果token过期自动刷新token
-            if($tokenType == 1){
-                //通过token获取刷新token
-                $resObj = Db::table('user_token')->where('md5token',md5($token))->first();
-                //判断刷新token时间是否过期没有过期执行刷新token - 必须同一个用户设备
-                if($resObj && $resObj->uid && $resObj->key == self::getkey($resObj->uid)){
-                    $res = self::refreshToken($resObj->refresh_token);
-                    if(!empty($res['access_token'])){
-                        $isTip = false;
-                        //缓存新token - 提供给中间件拦截返回客户端
-                        Cache::forever('app_new_token_'.request()->header('x-qst-appid'), $res['access_token']);
-                        self::$payload['accessPayload']['token'] = $res['access_token'];
-                        return (array)self::$payload['accessPayload'];
-                    }
-                }
-            }
-            if($isTip){
-                //身份验证会话已过期，请重新登录！
-                throw new JwtLoginTokenException(trans('jwt.token_to_login',[], 'qstapp_msg'));
-            }
-        } catch (UnexpectedValueException $unexpectedValueException) {
-            //获取的扩展字段不存在
-            throw new JwtTokenException(trans('jwt.token_Field_not_exist',[], 'qstapp_msg'));
-        } catch (\Exception $exception) {
-            throw new JwtTokenException($exception->getMessage());
-        }
-        $decoded = json_decode(json_encode($decoded), true);
-        if ($config['is_single_device'] && $decoded['extend']['ip'] != request()->getRealIp()) {
-            //验证IP是否一致不一致 已在别的地方登录强制下线
-            throw new JwtQuitLoginTokenException(trans('jwt.token_log_off',[], 'qstapp_msg'));
-        }
-        $decoded['token'] = $token;
-        return $decoded;
-    }
-
-    /**
-     * @desc: 更新token数据缓存
-     * @param array $newToekns
-     * @param string $key
-     * @return array
-     */
-    private static function upDataToken(array $newToekns, string $key): array
-    {
-        if(empty($newToekns['uid']) || empty($key)) return [];
-        $config = self::_getConfig();
-        //增加MD5token值用来方便查询数据
-        $newToekns['md5token'] = md5($newToekns['access_token']);
-        Db::table('user_token')
-            ->updateOrInsert(
-                ['key' => $key],
-                $newToekns
-            );
-        $newToekns['key'] = $key;
-        Cache::forever($config['cache_token_pre'] . $key, $newToekns);
-        return $newToekns;
-    }
-
-    /**
-     * @desc: 获取当前登录UID
-     * @throws JwtTokenException
-     * @return mixed
-     */
-    public static function getCurrentUid()
-    {
-        return self::getExtendVal('uid') ?? 0;
-    }
-
-    /**
-     * @desc: 获取指定令牌扩展内容字段的值
-     *
-     * @param string $val
-     * @return mixed|string
-     * @throws JwtTokenException
-     */
-    public static function getExtendVal(string $val)
-    {
-        return self::getTokenExtend()[$val] ?? '';
-    }
-
-    /**
-     * @desc: 获取扩展字段.
+     * @desc: 获取配置文件
      * @return array
      * @throws JwtTokenException
      */
-    public static function getTokenExtend(): array
+    private static function getConfig(): array
     {
-        return (array) self::verify()['extend'];
-    }
-
-    /**
-     * @desc: 获令牌有效期剩余时长.
-     * @param int $tokenType
-     * @return int
-     */
-    public static function getTokenExp(int $tokenType = self::ACCESS_TOKEN): int
-    {
-        return (int) self::verify($tokenType)['exp'] - time();
-    }
-
-    /**
-     * @desc: 生成令牌.
-     *
-     * @param array  $payload    载荷信息
-     * @param string $secretKey  签名key
-     * @param string $algorithms 算法
-     * @return string
-     */
-    private static function makeToken(array $payload, string $secretKey, string $algorithms): string
-    {
-        return JWT::encode($payload, $secretKey, $algorithms);
-    }
-
-    /**
-     * @desc: 获取加密载体.
-     *
-     * @param array $config 配置文件
-     * @param array $extend 扩展加密字段
-     * @return array
-     */
-    private static function generatePayload(array $config, array $extend): array
-    {
-        $basePayload = [
-            'iss' => $config['iss'],
-            'iat' => time(),
-            'exp' => time() + $config['access_exp'],
-            'extend' => $extend
-        ];
-        $resPayLoad = [];
-        $resPayLoad['accessPayload'] = $basePayload;
-        $basePayload['exp'] = time() + $config['refresh_exp'];
-        $resPayLoad['refreshPayload'] = $basePayload;
-        return $resPayLoad;
+        $config = config('plugin.gzqsts.core.app.jwt');
+        if (empty($config)) {
+            throw new UnprocessableException(trans('jwt.notConfig',[], 'messages'));
+        }
+        return $config;
     }
 
     /**
@@ -366,16 +47,17 @@ class JwtToken
      * @return string
      * @throws JwtTokenException
      */
-    private static function getPublicKey(string $algorithm, int $tokenType = self::ACCESS_TOKEN): string
+    private static function getPublicKey(bool $isRefresh = false): string
     {
-        $config = self::_getConfig();
-        switch ($algorithm) {
+        $config = self::getConfig();
+        switch ($config['algorithms']) {
             case 'HS256':
-                $key = self::ACCESS_TOKEN == $tokenType ? $config['access_secret_key'] : $config['refresh_secret_key'];
+                $key = $isRefresh ? $config['refresh_secret_key'] : $config['access_secret_key'];
                 break;
             case 'RS512':
             case 'RS256':
-                $key = self::ACCESS_TOKEN == $tokenType ? $config['access_public_key'] : $config['refresh_public_key'];
+                $dir = $isRefresh ? $config['refresh_public_key'] : $config['access_public_key'];
+                $key = file_get_contents($dir);
                 break;
             default:
                 $key = $config['access_secret_key'];
@@ -389,15 +71,17 @@ class JwtToken
      * @param int $tokenType 令牌类型
      * @return string
      */
-    private static function getPrivateKey(array $config, int $tokenType = self::ACCESS_TOKEN): string
+    private static function getPrivateKey(bool $isRefresh = false): string
     {
+        $config = self::getConfig();
         switch ($config['algorithms']) {
             case 'HS256':
-                $key = self::ACCESS_TOKEN == $tokenType ? $config['access_secret_key'] : $config['refresh_secret_key'];
+                $key = $isRefresh ? $config['refresh_secret_key']: $config['access_secret_key'];
                 break;
             case 'RS512':
             case 'RS256':
-                $key = self::ACCESS_TOKEN == $tokenType ? $config['access_private_key'] : $config['refresh_private_key'];
+                $dir = $isRefresh ? $config['refresh_private_key']: $config['access_private_key'];
+                $key = file_get_contents($dir);
                 break;
             default:
                 $key = $config['access_secret_key'];
@@ -405,28 +89,369 @@ class JwtToken
         return $key;
     }
 
-    /**
-     * @desc: 获取配置文件
-     * @return array
-     * @throws JwtTokenException
-     */
-    private static function _getConfig(): array
+    //获取本次启动设备信息 - 优先缓存 -> 查询SQL - 已初始化过应用基础信息记录 才能正确获取到数据
+    public static function getDevices(): array
     {
-        $config = config('plugin.gzqsts.qstapp.app.jwt');
-        if (empty($config)) {
-            throw new JwtTokenException(trans('jwt.notConfig',[], 'qstapp_msg'));
+        $device  = request()->header('qst-device-id','');
+        $dev = Cache::get($device, function () use($device){
+            $res = (new Device)::where('device_id', $device)->first();
+            return !empty($res)? $res->toArray() : [];
+        });
+        if (empty($dev)) {
+            throw new UnprocessableException(trans('jwt.token_Field_not_exist',[], 'messages'));
         }
-        return $config;
+        return $dev;
     }
 
     /**
-     * @desc: tokenMd5用于索引 增删改查 生成：uid +各平台标识 +操作系统名称 +设备品牌名称
+     * @desc: 唯一KEY 生成：MD5 uid + 平台标识
      * @param int $uid
      * @return string
      */
-    public static function getkey(int $uid): string
+    public static function getkey(int $uid, array $devices): string
     {
-        $devices = QTgetDevices();
-        return md5($uid.$devices['uniPlatform'].$devices['osName'].$devices['deviceModel']);
+        return md5((string)$uid.$devices['platform']);
     }
+
+    /**
+     * @desc: 生成令牌.
+     *
+     * @param array  $payload    载荷信息
+     * @param string $secretKey  签名key
+     * @param string $algorithms 算法
+     * @return string
+     */
+    private static function makeToken(array $payload, string $secretKey): string
+    {
+        $config = self::getConfig();
+        return JWT::encode($payload, $secretKey, $config['algorithms']);
+    }
+
+    /**
+     * @desc: 获取加密载体.
+     *
+     * @param array $config 配置文件
+     * @param array $extend 扩展加密字段
+     * @return array
+     */
+    private static function generatePayload(array $extend): array
+    {
+        $config = self::getConfig();
+        $basePayload = [
+            'iss' => $config['iss'],
+            'iat' => time(),
+            'exp' => time() + (int)$config['access_exp'],
+            'extend' => $extend
+        ];
+        $resPayLoad = [];
+        $resPayLoad['accessPayload'] = $basePayload;
+        $basePayload['exp'] = time() + (int)$config['refresh_exp'];
+        $resPayLoad['refreshPayload'] = $basePayload;
+        return $resPayLoad;
+    }
+
+    //获取客户端 token
+    public static function getHeaderToken(): string
+    {
+        $reqToken  = request()->header('qst-token','');
+        if(empty($reqToken)){
+            return '';
+        }
+        if(strlen($reqToken)>32){
+            return $reqToken;
+        }else{
+            //说明$reqToken是token表中的KEY，通过key获取token表数据
+            $cdata = self::getUserTokenData($reqToken);
+            return !empty($cdata['access_token'])?$cdata['access_token']:'';
+        }
+    }
+
+    //获取token表数据
+    public static function getUserTokenData(string $key): array
+    {
+        $config = self::getConfig();
+        return Cache::get($config['cache_token_pre'] . $key, function () use($key){
+            $res = (new UserToken)::where('key', $key)->first();
+            return !empty($res)? $res->toArray() : [];
+        });
+    }
+
+    private static function getUserExt(array $user): array
+    {
+        $fields = [
+            'uid',
+            'cloud_id',
+            'mobile',
+            'email',
+            'invite_code',
+            'state',
+            'roles',
+            'role_id',
+            'role_time'
+        ];
+        $newUser = array_intersect_key($user, array_flip($fields));
+        //必须存在指定字段数据
+        foreach($newUser as $key => $val){
+            if(!in_array($key, $fields)){
+                throw new UnprocessableException(trans('jwt.emptyExt',[], 'messages'));
+            }
+        }
+        return $newUser;
+    }
+
+    /**
+     * @desc: 获令牌有效期剩余时长.
+     * @param int $tokenType
+     * @return int
+     */
+    private static function getTokenExp(int $exp): int
+    {
+        return $exp - time();
+    }
+
+    /**
+     * @desc: 只负责创建新token
+     * @param array $user 用户表数据合并到token中
+     * @return array token表数据
+     * @throws UnprocessableException
+     */
+    public static function creationToken(array $user): array
+    {
+        if (!isset($user['uid']) || empty($user['uid'])) {
+            throw new UnprocessableException(trans('jwt.lackId',[], 'messages'));
+        }
+        $config = self::getConfig();
+        $devices = self::getDevices();
+        $key = self::getkey($user['uid'], $devices);
+        $ip = request()->getRealIp($safe_mode = true);
+        //合并到扩展数据中的部分数据,解析token得到用户表完整字段数据+ 该扩展字段
+        $userExts = [
+            'key' => $key,
+            'platform' => $devices['platform'],
+            'device_id' => $devices['device_id'],
+            'ip' => $ip
+        ];
+        //获取数据体 extend字段存放extend原数据
+        $payload = self::generatePayload(array_merge(self::getUserExt($user), $userExts));
+        //插入token表数据
+        $in_user_token = [
+            'key' => $key,
+            'uid' => $user['uid'],
+            'appid' => $devices['appid'],
+            'device_id' => $devices['device_id'],
+            'push_clientid' => $devices['push_clientid'],
+            'device_type' => $devices['device_type'],
+            'device_brand' => $devices['device_brand'],
+            'device_model' => $devices['device_model'],
+            'os_name' => $devices['os_name'],
+            'os_version' => $devices['os_version'],
+            'os_language' => $devices['os_language'],
+            'rom_name' => $devices['rom_name'],
+            'rom_version' => $devices['rom_version'],
+            'platform' => $devices['platform'],
+            'app_language' => $devices['app_language'],
+            'ua' => $devices['ua'],
+            'access_exptime' => $payload['accessPayload']['exp'],
+            'access_token' => self::makeToken($payload['accessPayload'], self::getPrivateKey()),
+            'refresh_exptime' => $payload['refreshPayload']['exp'],
+            'refresh_token' => self::makeToken($payload['refreshPayload'], self::getPrivateKey(true)),
+            'last_login_ip' => $ip,
+            'last_login_date' => time()
+        ];
+        $UserToken = new UserToken;
+        //通过平台类型 +UID 查询TOKEN表是否已存在数据 无需查询缓存
+        $res = $UserToken::where('platform', $devices['platform'])
+            ->where('uid', $user['uid'])
+            ->first();
+        //如果存在数据 - 数据
+        if(!empty($res) && $res->key){
+            $UserToken::where('key', $res->key)->update($in_user_token);
+        }else{
+            $UserToken::create($in_user_token);
+        }
+        //缓存TOKEN表数据 - 永久
+        Cache::forever($config['cache_token_pre'] . $key, $in_user_token);
+        return $in_user_token;
+    }
+
+    /**
+     * @desc: 刷新token 返回用户数据
+     * @param string $refreshToken
+     * @return array token表数据
+     */
+    public static function refreshToken(string $refreshToken, array $usersExp = []): array
+    {
+        if(empty($refreshToken) || 'undefined' == $refreshToken){
+            //刷新令牌无效
+            throw new UnprocessableException(trans('jwt.token_invalid',[], 'messages'));
+        }
+        $config = self::getConfig();
+        JWT::$leeway = $config['leeway'];
+        try {
+            $decoded = JWT::decode($refreshToken, new Key(self::getPublicKey(true), $config['algorithms']));
+        } catch (SignatureInvalidException $signatureInvalidException) {
+            //身份验证令牌无效
+            throw new JwtTokenException(trans('jwt.token_invalid',[], 'messages'), ['dataType' => 'login']);
+        } catch (BeforeValidException $beforeValidException) {
+            //身份验证令牌尚未生效
+            throw new UnprocessableException(trans('jwt.token_check_invalid',[], 'messages'));
+        } catch (ExpiredException $expiredException) {
+            //身份验证会话已过期，请重新登录
+            throw new JwtTokenException(trans('jwt.token_to_login',[], 'messages'), ['dataType' => 'login']);
+        } catch (\Exception $exception) {
+            throw new UnprocessableException($exception->getMessage());
+        }
+        /*(
+            [iss] => www.gzqsts.com
+            [iat] => 1686548577
+            [exp] => 1686634977
+            [extend] => Array(
+                [uid] => 1
+                [key] => 5ce5bf12ee2b05f5f450f159a8398a07
+                [platform] => web
+                [device_id] => 1684995458543188923
+                [ip] => 192.168.1.106
+                ...user扩展数据
+            )
+        )*/
+        $decoded = json_decode(json_encode($decoded), true);
+        if(empty($decoded['extend'])){
+            throw new UnprocessableException(trans('jwt.token_invalid',[], 'messages'));
+        }
+        $user = $decoded['extend'];
+        if(!empty($usersExp)){
+            //更新用户最新的扩展数据
+            $user = array_merge($user, $usersExp);
+        }
+        //直接创建新token
+        $ip = request()->getRealIp($safe_mode = true);
+        //合并到扩展数据中的部分数据,解析token得到用户表完整字段数据+ 该扩展字段
+        $userExts = [
+            'key' => $user['key'],
+            'platform' => $user['platform'],
+            'device_id' => $user['device_id'],
+            'ip' => $ip
+        ];
+        //获取数据体 extend字段存放extend原数据
+        $payload = self::generatePayload(array_merge(self::getUserExt($user), $userExts));
+        $upData = [
+            'access_exptime' => $payload['accessPayload']['exp'],
+            'access_token' => self::makeToken($payload['accessPayload'], self::getPrivateKey()),
+            'refresh_exptime' => $payload['refreshPayload']['exp'],
+            'refresh_token' => self::makeToken($payload['refreshPayload'], self::getPrivateKey(true)),
+            'last_login_ip' => $ip,
+            'last_login_date' => time()
+        ];
+        $UserToken = new UserToken;
+        //通过设备ID + 平台类型 查询 TOKEN表是否已存在数据 无需查询缓存
+        $res = $UserToken::where('key', $user['key'])->first();
+        //如果存在数据 - 数据
+        if(!empty($res) && $res->key){
+            $UserToken::where('key', $user['key'])->update($upData);
+            //更新缓存
+            $upData = array_merge($res->toArray(), $upData);
+            //缓存TOKEN表数据 - 永久
+            Cache::forever($config['cache_token_pre'] . $user['key'], $upData);
+        }else{
+            throw new UnprocessableException(trans('jwt.token_updata',[], 'messages'));
+        }
+        return $upData;
+    }
+
+    //认证token（频繁操作） 返回用户数据 - 更新最后登录时间、最后访问IP - 需查询限制8小时只更新一次
+    /*返回{
+         "uid": 2,
+         "cloud_id": "1368-sdasdasd-54511-552",
+         "mobile": "136854511552",
+         "email": "sfsd3546234334",
+         "invite_code": "sftttttttttsd",
+         "state": 1,
+         "roles": "21,22,23",
+         "role_id": 21,
+         "role_time": 0,
+         "key": "bec5e4d6ba2781c234609a8e182f6d7a",
+         "platform": "web",
+         "device_id": "16866417572792196384",
+         "ip": "192.168.1.106",
+         "token": ""
+     }*/
+    public static function verifyToken(string $token = '', bool $isLoginTip = true): array
+    {
+        $config = self::getConfig();
+        //时钟偏差冗余时间，单位秒。建议这个余地应该不大于几分钟。
+        JWT::$leeway = $config['leeway'];
+        try {
+            if(empty($token)){
+                $token = self::getHeaderToken();
+            }
+            if(strlen($token)<=32){
+                throw new UnprocessableException(trans('jwt.token_empty',[], 'messages'));
+            }
+            //algorithms 算法类型
+            $decoded = JWT::decode($token, new Key(self::getPublicKey(), $config['algorithms']));
+        } catch (SignatureInvalidException $signatureInvalidException) {
+            //身份验证令牌无效
+            if($isLoginTip){
+                throw new JwtTokenException(trans('jwt.token_invalid',[], 'messages'), ['dataType' => 'login']);
+            }else{
+                $decoded = [];
+            }
+        } catch (BeforeValidException $beforeValidException) {
+            //身份验证令牌尚未生效
+            throw new UnprocessableException(trans('jwt.token_check_invalid',[], 'messages'));
+        } catch (ExpiredException $expiredException) {
+            //身份验证会话已过期，请重新登录
+            if($isLoginTip){
+                throw new JwtTokenException(trans('jwt.token_to_login',[], 'messages'), ['dataType' => 'login']);
+            }else{
+                $decoded = [];
+            }
+        } catch (\Exception $exception) {
+            throw new UnprocessableException($exception->getMessage());
+        }
+        $decoded = json_decode(json_encode($decoded), true);
+        if(empty($decoded['extend'])){
+            throw new UnprocessableException(trans('jwt.token_invalid',[], 'messages'));
+        }
+        $decoded['extend']['token'] = $token;
+        if ($config['is_single_device'] && $decoded['extend']['ip'] != request()->getRealIp($safe_mode = true) && $isLoginTip) {
+            //验证IP是否一致不一致 已在别的地方登录强制下线
+            throw new JwtTokenException(trans('jwt.token_log_off',[], 'messages'), ['dataType' => 'quitLogin']);
+        }
+
+        $cdata = self::getUserTokenData($decoded['extend']['key']);
+        //token过期自动刷新token 过期时间剩10分钟进行刷新新token
+        if(self::getTokenExp((int)$decoded['exp']) < 600){
+            if(!empty($cdata) && self::getTokenExp((int)$cdata['refresh_exptime']) >0){
+                $res = self::refreshToken($cdata['refresh_token']);
+                //增加新token下发客户端
+                if(!empty($res['access_token'])){
+                    //缓存新token - 提供给中间件拦截返回客户端
+                    Cache::forever('app_new_token_'.$res['uid'], $res['access_token']);
+                    $decoded['extend']['token'] = $res['access_token'];
+                }
+            }
+        }else{
+            //更新最后登录时间、最后访问IP - 需查询限制6小时只更新一次
+            if(!empty($cdata) && ($cdata['last_login_date'] + 21600) < time()){
+                $upData = [
+                    'last_login_ip' => request()->getRealIp($safe_mode = true),
+                    'last_login_date' => time()
+                ];
+                (new UserToken)::where('key', $cdata['key'])->update($upData);
+                //更新缓存
+                Cache::forever($config['cache_token_pre'] . $cdata['key'], array_merge($cdata, $upData));
+            }
+        }
+        return $decoded['extend'];
+    }
+
+    //删除token 通过key或token解析得到KEY删除
+    public static function clearByKey(string $key): void
+    {
+        $config = self::getConfig();
+        (new UserToken)::where('key', $key)->delete();
+        Cache::forget($config['cache_token_pre'] . $key);
+    }
+
 }

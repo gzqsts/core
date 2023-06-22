@@ -30,9 +30,9 @@ use Webman\Http\Response;
 ::::异常类说明::::
 统一错误码、统一客户端处理约定：
 1.服务器内部错误/其它未自定义异常捕获（HTTP Status 500 - 错误码：500）（客户端：提示错误）
-use Gzqsts\Core\exceptions\ServerErrorHttpException;
+use Gzqsts\Core\exception\ServerErrorHttpException;
 2.身份验证异常 - 没有进行认证或者认证非法（HTTP Status 401 - 错误码：401）
-use Gzqsts\Core\exceptions\UnauthorizedHttpException;
+use Gzqsts\Core\exception\UnauthorizedHttpException;
     错误类型dataType (类型为空时，客户端提示错误)：
     1.login 登录（客户端：进入登录页面）
     2.quitLogin 强制退出登录（客户端：退出登录逻辑操作 - 返回首页）
@@ -41,14 +41,16 @@ use Gzqsts\Core\exceptions\UnauthorizedHttpException;
     5.buyMoney 钱包余额不足（客户端：进入购买余额页面）
     6.nullifyRole 用户角色过期而且无法自动切换角色（客户端：进入开通角色页面）
     7.errorUser 用户禁止访问/系统黑名单用户（客户端：进入系统错误页面）
-    8.tokenError token操作错误（客户端：清空客户端本地登录信息，调转登录页面）
+    8.tokenError token操作错误（客户端：提示信息）
     9.addCreditsTip 积分提示（客户端：提示信息）
     10.encrypt 解密处理（客户端：解密数据）
 3.资源授权异常类/接口限流访问/防抖/锁定/由于请求频次达到上限而被拒绝访问（HTTP Status 429 - 错误码：429）（客户端：提示错误）
-use Gzqsts\Core\exceptions\ThrottleException;
+use Gzqsts\Core\exception\ThrottleException;
 4.资源/路由地址不存在异常类（HTTP Status 404 - 错误码：404）（客户端：跳转错误页面显示错误）
-use Gzqsts\Core\exceptions\NotFoundHttpException;
+use Gzqsts\Core\exception\NotFoundHttpException;
 5.当参数不是预期的类型时抛出 - 如果请求中的内容类型是错误的 （HTTP Status 415 - 错误码：415）InvalidArgumentException（客户端：提示错误）
+6.用来表示校验错误 （HTTP Status 422 - 错误码：422）（客户端：提示错误）
+use Gzqsts\Core\exception\UnprocessableException;
 
 使用例:
 $params = [
@@ -61,7 +63,7 @@ $params = [
         'customUrl' => '自定义跳转页面地址（与customTip二选一）',
     ]
 ];
-throw new BadRequestHttpException('提示消息',$params);
+throw new UnprocessableException('提示消息',$params);
 */
 
 class Handler extends ExceptionHandler
@@ -199,7 +201,7 @@ class Handler extends ExceptionHandler
 			//当参数不是预期的类型时抛出
             $this->errorMessage = 'Expected parameter Settings are abnormal:' . $e->getMessage();
         } else {
-			$this->errorCode = $this->statusCode = $code==0? 200 : 500;
+			$this->errorCode = $this->statusCode = !empty($code)?$code:500;
             $this->errorMessage = $e->getMessage();
         }
     }
@@ -238,8 +240,7 @@ class Handler extends ExceptionHandler
 		}
         $header = array_merge(['Content-Type' => 'application/json'], $this->header);
 		if ($request->expectsJson()) {
-			//json形式请求 返回状态码200
-			return new Response(200, $header, json_encode($responseBody, JSON_UNESCAPED_UNICODE));
+			return new Response($this->statusCode, $header, json_encode($responseBody, JSON_UNESCAPED_UNICODE));
 		}
 		//不是json请求正常返回HTTP状态码码
 		return new Response($this->statusCode, $header, json_encode($responseBody, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
