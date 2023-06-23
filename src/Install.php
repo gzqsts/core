@@ -62,6 +62,9 @@ class Install
     {
         static::uninstalllang();
         foreach (static::$pathRelation as $source => $dest) {
+            if($source == 'resource/translations'){
+                continue;
+            }
             $path = base_path() . "/$dest";
             if (!is_dir($path) && !is_file($path)) {
                 continue;
