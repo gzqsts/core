@@ -11,6 +11,7 @@ class Install
      */
     protected static $pathRelation = array(
         'config/plugin/gzqsts/core' => 'config/plugin/gzqsts/core',
+        'resource/translations' => 'resource/translations',
     );
 
     /**
@@ -59,6 +60,7 @@ class Install
      */
     public static function uninstallByRelation()
     {
+        static::uninstalllang();
         foreach (static::$pathRelation as $source => $dest) {
             $path = base_path() . "/$dest";
             if (!is_dir($path) && !is_file($path)) {
@@ -70,6 +72,23 @@ class Install
                 continue;
             }
             remove_dir($path);
+        }
+    }
+
+    //卸载语言包
+    public static function uninstalllang()
+    {
+        $path = base_path();
+        $validate_lang = [
+            $path . '/resource/translations/en/validate.php',
+            $path . '/resource/translations/zh-Hans/validate.php',
+            $path . '/resource/translations/zh-Hant/validate.php'
+        ];
+        foreach ($validate_lang as $langPath) {
+            if (is_file($langPath)) {
+                unlink($langPath);
+                continue;
+            }
         }
     }
 

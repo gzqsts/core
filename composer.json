@@ -23,11 +23,17 @@
     "alibabacloud/client": "^1.5",
     "qiniu/php-sdk": "^7.9",
     "qcloudsms/qcloudsms_php": "^0.1.4",
-    "workerman/redis-queue": "^1.0"
+    "workerman/redis-queue": "^1.0",
+    "symfony/translation": "^5.4|^6.0",
+    "topthink/think-container": "~2.0",
+    "topthink/think-helper":"^3.1"
   },
   "autoload": {
     "psr-4": {
-      "Gzqsts\\Core\\": "src"
-    }
+      "Gzqsts\\Core\\": "src/"
+    },
+    "files": [
+      "src/validate/helper.php"
+    ]
   }
 }
