@@ -5,14 +5,14 @@ declare (strict_types = 1);
 namespace Gzqsts\Core\validate;
 
 use Closure;
-use Gzqsts\Core\validate\exception\ValidateException;
 use think\helper\Str;
-use Gzqsts\Core\validate\validate\ValidateRule;
 use support\Db;
+use Gzqsts\Core\validate\exception\ValidateException;
+use Gzqsts\Core\validate\validate\ValidateRule;
 
 /**
  * 数据验证类
- * @package think
+ * @package think fo manwbe
  */
 class Validate
 {
@@ -509,6 +509,12 @@ class Validate
             }
 
             if (true !== $result) {
+                //替换语言包 格式'{{Type error}}'
+                if (strpos($result, '{{') !== false) {
+                    $result = preg_replace_callback("/\s*\{{(.+?)}}/is",function($val){
+                        return $val[1]?trans($val[1], [], 'validate'):'';
+                    }, $result);
+                }
                 // 没有返回true 则表示验证失败
                 if (!empty($this->batch)) {
                     // 批量验证
@@ -636,7 +642,7 @@ class Validate
                 if (!empty($msg[$i])) {
                     $message = $msg[$i];
                     if (is_string($message) && strpos($message, '{%') === 0) {
-                        $message = trans(substr($message, 2, -1), [], 'validate', config('translations.locale'));
+                        $message = trans(substr($message, 2, -1), [], 'validate');
                     }
                 } else {
                     $message = $this->getRuleMsg($field, $title, $info, $rule);
@@ -1286,7 +1292,6 @@ class Validate
             $rule = explode(',', $rule);
         }
         [$min, $max] = $rule;
-
         return $value >= $min && $value <= $max;
     }
 
@@ -1559,7 +1564,7 @@ class Validate
         } elseif (0 === strpos($type, 'require')) {
             $msg = $this->typeMsg['require'];
         } else {
-            $msg = $title . trans('not conform to the rules', [], 'validate', config('translations.locale'));
+            $msg = $title . trans('not conform to the rules', [], 'validate');
         }
 
         if (is_array($msg)) {
@@ -1580,9 +1585,9 @@ class Validate
     protected function parseErrorMsg(string $msg, $rule, string $title)
     {
         if (0 === strpos($msg, '{%')) {
-            $msg = trans(substr($msg, 2, -1), [], 'validate', config('translations.locale'));
-        } elseif (trans($msg, [], 'validate', config('translations.locale'))) {
-            $msg = trans($msg, [], 'validate', config('translations.locale'));
+            $msg = trans(substr($msg, 2, -1), [], 'validate');
+        } elseif (trans($msg, [], 'validate')) {
+            $msg = trans($msg, [], 'validate');
         }
 
         if (is_array($msg)) {

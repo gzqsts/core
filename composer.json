@@ -33,7 +33,8 @@
       "Gzqsts\\Core\\": "src/"
     },
     "files": [
-      "src/validate/helper.php"
+      "src/validate/helper.php",
+      "src/laravelEvent/helper.php"
     ]
   }
 }

@@ -58,7 +58,7 @@ class Aliyun
                 $data['msg'] = '发送成功';
             } else {
                 $data['code'] = 100;
-                $data['msg'] = '发送失败，'.$result['Message'];
+                $data['msg'] = 'Error:'.$result['Message'];
             }
         } else {
             $data['code'] = 100;

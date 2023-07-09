@@ -201,7 +201,7 @@ class Handler extends ExceptionHandler
 			//当参数不是预期的类型时抛出
             $this->errorMessage = 'Expected parameter Settings are abnormal:' . $e->getMessage();
         } else {
-			$this->errorCode = $this->statusCode = !empty($code)?$code:500;
+			$this->errorCode = $this->statusCode == 500|| $code == 500 ? 500 : $this->statusCode;
             $this->errorMessage = $e->getMessage();
         }
     }

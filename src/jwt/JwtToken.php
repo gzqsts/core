@@ -18,11 +18,8 @@ use Gzqsts\Core\exception\{
 };
 
 use Gzqsts\Core\laravelCache\Cache;
-
-use app\model\{
-    Device,
-    UserToken
-};
+use app\model\Device;
+use app\model\user\UserToken;
 
 class JwtToken
 {
@@ -190,9 +187,9 @@ class JwtToken
             'role_time'
         ];
         $newUser = array_intersect_key($user, array_flip($fields));
-        //必须存在指定字段数据
-        foreach($newUser as $key => $val){
-            if(!in_array($key, $fields)){
+        //必须存在$fields指定字段数据
+        foreach($fields as $val){
+            if(!in_array($val, array_keys($newUser))){
                 throw new UnprocessableException(trans('jwt.emptyExt',[], 'messages'));
             }
         }
@@ -212,6 +209,16 @@ class JwtToken
     /**
      * @desc: 只负责创建新token
      * @param array $user 用户表数据合并到token中
+        设置TOKEN用户基础数据
+        "uid": 2,
+        "cloud_id": "1368-sdasdasd-54511-552",
+        "mobile": "136854511552",
+        "email": "sfsd3546234334",
+        "invite_code": "sftttttttttsd",
+        "state": 1,
+        "roles": "21,22,23",
+        "role_id": 21,
+        "role_time": 0,
      * @return array token表数据
      * @throws UnprocessableException
      */
@@ -265,6 +272,8 @@ class JwtToken
             ->first();
         //如果存在数据 - 数据
         if(!empty($res) && $res->key){
+            //token被更新事件
+            \Webman\Event\Event::emit('user.updataToken', $in_user_token);
             $UserToken::where('key', $res->key)->update($in_user_token);
         }else{
             $UserToken::create($in_user_token);
@@ -278,6 +287,31 @@ class JwtToken
      * @desc: 刷新token 返回用户数据
      * @param string $refreshToken
      * @return array token表数据
+     *
+    [key] => e68758ad043da8bb938225a12f64d4a6
+    [uid] => 5
+    [appid] => __UNI__37775A7
+    [device_id] => 16882041878022102502
+    [push_clientid] => 1793ed1ea54accaf9831fa0aeb541541
+    [device_type] => pc
+    [device_brand] =>
+    [device_model] => PC
+    [os_name] => windows
+    [os_version] => 10 x64
+    [os_language] =>
+    [rom_name] =>
+    [rom_version] =>
+    [platform] => web
+    [app_language] => zh-Hans
+    [ua] => Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36
+    [access_exptime] => 1688302930
+    [access_token] =>
+    [refresh_exptime] => 1695992530
+    [refresh_token] =>
+    [last_login_ip] => 192.168.1.106
+    [last_login_date] => 1688216530
+    [updated_at] => 2023-07-01 17:38:30
+    [created_at] => 2023-07-01 17:38:30
      */
     public static function refreshToken(string $refreshToken, array $usersExp = []): array
     {
@@ -350,6 +384,8 @@ class JwtToken
             $UserToken::where('key', $user['key'])->update($upData);
             //更新缓存
             $upData = array_merge($res->toArray(), $upData);
+            //token被更新事件
+            \Webman\Event\Event::emit('user.updataToken', $upData);
             //缓存TOKEN表数据 - 永久
             Cache::forever($config['cache_token_pre'] . $user['key'], $upData);
         }else{
@@ -380,12 +416,16 @@ class JwtToken
         $config = self::getConfig();
         //时钟偏差冗余时间，单位秒。建议这个余地应该不大于几分钟。
         JWT::$leeway = $config['leeway'];
+        $decoded = [];
         try {
             if(empty($token)){
                 $token = self::getHeaderToken();
-            }
-            if(strlen($token)<=32){
-                throw new UnprocessableException(trans('jwt.token_empty',[], 'messages'));
+            }else{
+                if(strlen($token)<=32){
+                    //说明$reqToken是token表中的KEY，通过key获取token表数据
+                    $cdata = self::getUserTokenData($token);
+                    $token = !empty($cdata['access_token'])?$cdata['access_token']:'';
+                }
             }
             //algorithms 算法类型
             $decoded = JWT::decode($token, new Key(self::getPublicKey(), $config['algorithms']));
@@ -393,8 +433,6 @@ class JwtToken
             //身份验证令牌无效
             if($isLoginTip){
                 throw new JwtTokenException(trans('jwt.token_invalid',[], 'messages'), ['dataType' => 'login']);
-            }else{
-                $decoded = [];
             }
         } catch (BeforeValidException $beforeValidException) {
             //身份验证令牌尚未生效
@@ -403,12 +441,11 @@ class JwtToken
             //身份验证会话已过期，请重新登录
             if($isLoginTip){
                 throw new JwtTokenException(trans('jwt.token_to_login',[], 'messages'), ['dataType' => 'login']);
-            }else{
-                $decoded = [];
             }
         } catch (\Exception $exception) {
-            throw new UnprocessableException($exception->getMessage());
+            throw new UnprocessableException($exception->getMessage()??'Token error');
         }
+
         $decoded = json_decode(json_encode($decoded), true);
         if(empty($decoded['extend'])){
             throw new UnprocessableException(trans('jwt.token_invalid',[], 'messages'));
@@ -419,29 +456,35 @@ class JwtToken
             throw new JwtTokenException(trans('jwt.token_log_off',[], 'messages'), ['dataType' => 'quitLogin']);
         }
 
+        if(empty($decoded)){
+            //toekn 错误 - 客户端执行去登录
+            throw new JwtTokenException(trans('jwt.token_empty',[], 'messages'), ['dataType' => 'login']);
+        }
+
         $cdata = self::getUserTokenData($decoded['extend']['key']);
         //token过期自动刷新token 过期时间剩10分钟进行刷新新token
         if(self::getTokenExp((int)$decoded['exp']) < 600){
             if(!empty($cdata) && self::getTokenExp((int)$cdata['refresh_exptime']) >0){
                 $res = self::refreshToken($cdata['refresh_token']);
-                //增加新token下发客户端
-                if(!empty($res['access_token'])){
+                //增加新token下发客户端 $res['access_token']
+                if(!empty($res['key'])){
                     //缓存新token - 提供给中间件拦截返回客户端
-                    Cache::forever('app_new_token_'.$res['uid'], $res['access_token']);
+                    Cache::forever('app_new_token_'.$res['uid'], $res['key']);
+                    $decoded['extend']['key'] = $res['key'];
                     $decoded['extend']['token'] = $res['access_token'];
                 }
             }
-        }else{
-            //更新最后登录时间、最后访问IP - 需查询限制6小时只更新一次
-            if(!empty($cdata) && ($cdata['last_login_date'] + 21600) < time()){
-                $upData = [
-                    'last_login_ip' => request()->getRealIp($safe_mode = true),
-                    'last_login_date' => time()
-                ];
-                (new UserToken)::where('key', $cdata['key'])->update($upData);
-                //更新缓存
-                Cache::forever($config['cache_token_pre'] . $cdata['key'], array_merge($cdata, $upData));
-            }
+        }
+
+        //更新最后登录时间、最后访问IP - 需查询限制1小时更新一次
+        if(!empty($cdata) && ($cdata['last_login_date'] + 3600) < time()){
+            $upData = [
+                'last_login_ip' => request()->getRealIp($safe_mode = true),
+                'last_login_date' => time()
+            ];
+            (new UserToken)::where('key', $cdata['key'])->update($upData);
+            //更新缓存
+            Cache::forever($config['cache_token_pre'] . $cdata['key'], array_merge($cdata, $upData));
         }
         return $decoded['extend'];
     }

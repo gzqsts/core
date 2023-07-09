@@ -87,12 +87,12 @@ class Install
             $path . '/resource/translations/zh-Hans/validate.php',
             $path . '/resource/translations/zh-Hant/validate.php'
         ];
-        foreach ($validate_lang as $langPath) {
+        /*foreach ($validate_lang as $langPath) {
             if (is_file($langPath)) {
                 unlink($langPath);
                 continue;
             }
-        }
+        }*/
     }
 
 }
